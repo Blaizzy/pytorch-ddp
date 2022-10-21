@@ -120,53 +120,66 @@ def init_distributed():
             rank=rank)
 
     # this will make all .cuda() calls work properly
-    torch.cuda.set_device(local_rank)
+    # torch.cuda.set_device(rank)
     # synchronizes all the threads to reach this point before moving on
     dist.barrier()
-    setup_for_distributed(rank == 0)
+    # setup_for_distributed(rank == 0)
 
 
 if __name__ == '__main__':
     start = time.time()
     
     init_distributed()
+    rank = int(os.environ["RANK"])
+    
     
     PATH = './cifar_net.pth'
     trainloader, testloader = create_data_loader_cifar10()
-    net = torchvision.models.resnet50(False).cuda()
+    
+    rank = int(os.environ["RANK"])
+    net = torchvision.models.resnet50(False).to(f'cuda:{rank}')
+    
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(rank)
 
     # Convert BatchNorm to SyncBatchNorm. 
     net = nn.SyncBatchNorm.convert_sync_batchnorm(net)
 
-    local_rank = int(os.environ['LOCAL_RANK'])
-    net = nn.parallel.DistributedDataParallel(net, device_ids=[local_rank])
-    
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
+    # local_rank = int(os.environ['LOCAL_RANK'])
+    net = nn.parallel.DistributedDataParallel(
+        net, 
+        device_ids=[rank]
+    )
     
     # init neptune
     run = neptune.init_run(
         project='common/showroom',
         api_token='ANONYMOUS',
-        monitoring_namespace=f"monitoring/rank/{local_rank}"
+        monitoring_namespace=f"monitoring/rank/{rank}"
     )
-
+        
+    
     start_train = time.time()
-    train(net, trainloader, run, local_rank)
+    train(net, trainloader, run, rank)
     end_train = time.time()
-    # save
-    if is_main_process:
-        save_on_master(net.state_dict(), PATH)
-    dist.barrier()
 
     # test
-    test(net, PATH, testloader, run, local_rank)
-
+    test(net, PATH, testloader, run, rank)
+    
+   
     end = time.time()
     seconds = (end - start)
     seconds_train = (end_train - start_train)
     print(f"Total elapsed time: {seconds:.2f} seconds, \
      Train 1 epoch {seconds_train:.2f} seconds")
 
-# Single node multi-GPU
-# Terminal comman:
-# torchrun --nproc_per_node=2 train_ddp.py
+
+# Log from all processes (multi-node single GPU)
+
+# Error: Timestamp must be non-decreasing for series attribute .
+
+# Two terminals 
+# torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 train_ddp.py
+# torchrun --nproc_per_node=1 --nnodes=2 --node_rank=1 train_ddp.py
+
+
+# For multi GPU: https://pytorch.org/docs/stable/distributed.html#multi-gpu-collective-functions

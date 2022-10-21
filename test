@@ -1,6 +1,8 @@
 import os 
 import hashlib
 import time
+# gpu_list = "0,1"
+# os.environ['CUDA_VISIBLE_DEVICES'] = gpu_list
 
 
 import torch
@@ -19,7 +21,7 @@ from utils import setup_for_distributed, save_on_master, is_main_process
 
 
 def create_data_loader_cifar10():
-    rank = int(os.environ['RANK'])
+    rank = int(os.environ['LOCAL_RANK'])
     
     transform = transforms.Compose(
         [
@@ -44,11 +46,11 @@ def create_data_loader_cifar10():
     return trainloader, testloader
 
 
-def train(net, trainloader, run, rank):
+def train(net, trainloader, run, local_rank):
     print("Start training...")
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
-    epochs = 2
+    epochs = 1
     num_of_batches = len(trainloader)
     for epoch in range(epochs):  # loop over the dataset multiple times
         trainloader.sampler.set_epoch(epoch)
@@ -57,32 +59,35 @@ def train(net, trainloader, run, rank):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
 
-            images, labels = inputs.to(f'cuda:{rank}'), labels.to(f'cuda:{rank}')
+            images, labels = inputs.cuda(), labels.cuda()
 
             # zero the parameter gradients
             optimizer.zero_grad()
-            
+
             # forward + backward + optimize
             outputs = net(images)
             loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()  
-            running_loss += loss.item()
-            # run['metrics/train/batch_loss'].log(running_loss) 
-    
             
+            loss.backward()
+            optimizer.step()
+            
+           
+            # print statistics
+            running_loss += loss.item()
         
-        epoch_loss = running_loss / num_of_batches
-        run['metrics/train/loss'].log(epoch_loss)    
-        print(f'[Epoch {epoch + 1}/{epochs}] loss: {epoch_loss:.3f}')
-
+        print(f'[Epoch {epoch + 1}/{epochs}] loss: {running_loss / num_of_batches:.3f}')
+    
     print('Finished Training')
 
 
-def test(net, PATH, testloader, run, rank):
+def test(net, PATH, testloader, run, local_rank):
     # if is_main_process:
     #     net.load_state_dict(torch.load(PATH))
     # dist.barrier()
+    
+    rank = dist.get_rank()
+    
+    
 
     correct = 0
     total = 0
@@ -91,16 +96,22 @@ def test(net, PATH, testloader, run, rank):
         for data in testloader:
             images, labels = data
 
-            images, labels = images.to(f'cuda:{rank}'), labels.to(f'cuda:{rank}')
+            images, labels = images.cuda(), labels.cuda()
             # calculate outputs by running images through the network
             outputs = net(images)
             # the class with the highest energy is what we choose as prediction
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct+=(predicted == labels).sum().item()
+
     
     acc = 100 * correct // total
-    run['metrics/valid/acc'] = acc
+    
+    # if rank == 0:
+    #     dist.all_reduce(tensor=correct, async_op=True)
+    #     acc = 100 * correct // total
+    #     run['metrics/valid/acc'] = acc
+        
     print(f'Accuracy of the network on the 10000 test images: {acc} %')
 
 def init_distributed():
@@ -117,12 +128,12 @@ def init_distributed():
             backend="nccl",
             init_method=dist_url,
             world_size=world_size,
-            rank=rank)
+            rank=local_rank)
 
     # this will make all .cuda() calls work properly
     torch.cuda.set_device(local_rank)
     # synchronizes all the threads to reach this point before moving on
-    dist.barrier()
+    # dist.barrier()
     setup_for_distributed(rank == 0)
 
 
@@ -133,23 +144,32 @@ if __name__ == '__main__':
     
     PATH = './cifar_net.pth'
     trainloader, testloader = create_data_loader_cifar10()
+    local_rank = int(os.environ['LOCAL_RANK'])
     net = torchvision.models.resnet50(False).cuda()
 
     # Convert BatchNorm to SyncBatchNorm. 
     net = nn.SyncBatchNorm.convert_sync_batchnorm(net)
 
-    local_rank = int(os.environ['LOCAL_RANK'])
-    net = nn.parallel.DistributedDataParallel(net, device_ids=[local_rank])
     
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
+    net = nn.parallel.DistributedDataParallel(
+        net, 
+        device_ids=[local_rank]
+    )
     
     # init neptune
-    run = neptune.init_run(
-        project='common/showroom',
-        api_token='ANONYMOUS',
-        monitoring_namespace=f"monitoring/rank/{local_rank}"
-    )
-
+    # if rank == 0:
+    #     run = neptune.init_run(
+    #         project='common/showroom',
+    #         api_token='ANONYMOUS',
+    #     )
+    # else:
+    #     run = neptune.init_run(
+    #         project='common/showroom',
+    #         api_token='ANONYMOUS',
+    #         monitoring_namespace=f"monitoring/rank/{rank}",
+    #     )
+    run=0
+    
     start_train = time.time()
     train(net, trainloader, run, local_rank)
     end_train = time.time()
@@ -166,7 +186,3 @@ if __name__ == '__main__':
     seconds_train = (end_train - start_train)
     print(f"Total elapsed time: {seconds:.2f} seconds, \
      Train 1 epoch {seconds_train:.2f} seconds")
-
-# Single node multi-GPU
-# Terminal comman:
-# torchrun --nproc_per_node=2 train_ddp.py

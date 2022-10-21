@@ -65,17 +65,25 @@ def train(net, trainloader, run, rank):
             # forward + backward + optimize
             outputs = net(images)
             loss = criterion(outputs, labels)
+
+            
             loss.backward()
-            optimizer.step()  
-            running_loss += loss.item()
-            # run['metrics/train/batch_loss'].log(running_loss) 
+            optimizer.step()
+            
+            # print(loss.get_device())
+            
+            # synchronizes all the threads to reach this point before moving on
+            dist.reduce(tensor=loss, dst=0)
+            dist.barrier()
+            if rank==0:
+                running_loss += (loss.item() / dist.get_world_size())
     
             
-        
-        epoch_loss = running_loss / num_of_batches
-        run['metrics/train/loss'].log(epoch_loss)    
-        print(f'[Epoch {epoch + 1}/{epochs}] loss: {epoch_loss:.3f}')
-
+        if rank==0:
+            epoch_loss = running_loss / num_of_batches
+            run['metrics/train/loss'].log(epoch_loss)    
+            print(f'[Epoch {epoch + 1}/{epochs}] loss: {epoch_loss:.3f}')
+    
     print('Finished Training')
 
 
@@ -97,11 +105,21 @@ def test(net, PATH, testloader, run, rank):
             # the class with the highest energy is what we choose as prediction
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
-            correct+=(predicted == labels).sum().item()
+            
+            dist.reduce(tensor=labels, dst=0)
+            dist.barrier()
+            dist.reduce(tensor=predicted, dst=0)
+            dist.barrier()
+
+            if rank==0:
+                correct+=(predicted == labels).sum().item()
+
+
     
-    acc = 100 * correct // total
-    run['metrics/valid/acc'] = acc
-    print(f'Accuracy of the network on the 10000 test images: {acc} %')
+    if rank == 0:
+        acc = 100 * correct // total
+        run['metrics/valid/acc'] = acc
+        print(f'Accuracy of the network on the 10000 test images: {acc} %')
 
 def init_distributed():
 
@@ -120,53 +138,61 @@ def init_distributed():
             rank=rank)
 
     # this will make all .cuda() calls work properly
-    torch.cuda.set_device(local_rank)
+    # torch.cuda.set_device(rank)
     # synchronizes all the threads to reach this point before moving on
     dist.barrier()
-    setup_for_distributed(rank == 0)
+    # setup_for_distributed(rank == 0)
 
 
 if __name__ == '__main__':
     start = time.time()
     
     init_distributed()
+    rank = int(os.environ["RANK"])
+    
     
     PATH = './cifar_net.pth'
     trainloader, testloader = create_data_loader_cifar10()
-    net = torchvision.models.resnet50(False).cuda()
+    
+    rank = int(os.environ["RANK"])
+    net = torchvision.models.resnet50(False).to(f'cuda:{rank}')
+    
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(rank)
 
     # Convert BatchNorm to SyncBatchNorm. 
     net = nn.SyncBatchNorm.convert_sync_batchnorm(net)
 
-    local_rank = int(os.environ['LOCAL_RANK'])
-    net = nn.parallel.DistributedDataParallel(net, device_ids=[local_rank])
-    
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
+    # local_rank = int(os.environ['LOCAL_RANK'])
+    net = nn.parallel.DistributedDataParallel(
+        net, 
+        device_ids=[rank]
+    )
     
     # init neptune
     run = neptune.init_run(
         project='common/showroom',
         api_token='ANONYMOUS',
-        monitoring_namespace=f"monitoring/rank/{local_rank}"
+        monitoring_namespace=f"monitoring/rank/{rank}",
     )
-
+        
+    
     start_train = time.time()
-    train(net, trainloader, run, local_rank)
+    train(net, trainloader, run, rank)
     end_train = time.time()
-    # save
-    if is_main_process:
-        save_on_master(net.state_dict(), PATH)
-    dist.barrier()
 
     # test
-    test(net, PATH, testloader, run, local_rank)
-
+    test(net, PATH, testloader, run, rank)
+    
+    run.wait()
     end = time.time()
     seconds = (end - start)
     seconds_train = (end_train - start_train)
     print(f"Total elapsed time: {seconds:.2f} seconds, \
      Train 1 epoch {seconds_train:.2f} seconds")
 
-# Single node multi-GPU
-# Terminal comman:
-# torchrun --nproc_per_node=2 train_ddp.py
+# Log from one process (multi-node single GPU)
+# Two terminals 
+# torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 train_ddp.py
+# torchrun --nproc_per_node=1 --nnodes=2 --node_rank=1 train_ddp.py
+
+# For multi GPU: https://pytorch.org/docs/stable/distributed.html#multi-gpu-collective-functions
