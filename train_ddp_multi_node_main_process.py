@@ -137,8 +137,6 @@ def init_distributed():
             world_size=world_size,
             rank=rank)
 
-    # this will make all .cuda() calls work properly
-    # torch.cuda.set_device(rank)
     # synchronizes all the threads to reach this point before moving on
     dist.barrier()
     # setup_for_distributed(rank == 0)
