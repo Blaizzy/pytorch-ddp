@@ -157,16 +157,16 @@ def test(net, PATH, testloader):
 
 def init_distributed():
 
-    # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-    dist_url = "env://" # default
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
 
     # only works with torch.distributed.launch // torch.run
     world_size = 2
 
     dist.init_process_group(
             backend="nccl",
-            init_method=dist_url,
-            world_size=world_size)
+            world_size=world_size
+        )
 
     # this will make all .cuda() calls work properly
     rank = dist.get_rank()
@@ -179,7 +179,7 @@ def init_distributed():
 if __name__ == '__main__':
     start = time.time()
 
-    os.environ['CUSTOM_RUN_ID'] = 'test_ddp_1'
+    os.environ['NEPTUNE_CUSTOM_RUN_ID'] = 'test_ddp_1'
     
     init_distributed()
     
@@ -210,6 +210,3 @@ if __name__ == '__main__':
     seconds_train = (end_train - start_train)
     print(f"Total elapsed time: {seconds:.2f} seconds, \
      Train 1 epoch {seconds_train:.2f} seconds")
-
-
-
