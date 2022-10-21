@@ -173,7 +173,7 @@ if __name__ == '__main__':
 
 # Log from all processes (multi-node single GPU)
 
-# Error: Timestamp must be non-decreasing for series attribute .
+# ERROR: Timestamp must be non-decreasing for series attribute.
 
 # Two terminals 
 # torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 train_ddp.py
