@@ -198,7 +198,7 @@ if __name__ == '__main__':
     train(net, trainloader, dataset_sizes, rank)
     end_train = time.time()
     # save
-    if is_main_process:
+    if rank==0:
         save_on_master(net.state_dict(), PATH)
     dist.barrier()
 
