@@ -5,8 +5,9 @@ Modified for educational purposes.
 Nikolas, AI Summer
 """
 import os 
-gpu_list = "0,1,2,3"
+gpu_list = "0,1"
 os.environ['CUDA_VISIBLE_DEVICES'] = gpu_list
+os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
 
 import torch
 import torchvision
@@ -17,8 +18,11 @@ import torch.optim as optim
 import torch.distributed as dist
 import time
 import torchvision
+import neptune.new as neptune
+from neptune.new.types import File
 
 from utils import setup_for_distributed, save_on_master, is_main_process
+import hashlib
 
 
 def create_data_loader_cifar10():
@@ -42,10 +46,25 @@ def create_data_loader_cifar10():
     test_sampler = torch.utils.data.distributed.DistributedSampler(dataset=testset, shuffle=True)                                         
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
                                             shuffle=False, sampler=test_sampler, num_workers=16)
-    return trainloader, testloader
+    dataset_sizes = {'train': len(trainloader), 'test': len(testloader)}
+    return trainloader, testloader, dataset_sizes
 
 
-def train(net, trainloader):
+def train(net, trainloader, dataset_sizes):
+    rank = dist.get_rank()
+    if rank == 0:
+        run = neptune.init_run(
+            project='common/showroom',
+            api_token='ANONYMOUS',
+        )
+
+    else:
+        run = neptune.init_run(
+            project='common/showroom',
+            api_token='ANONYMOUS',
+            monitoring_namespace=f"monitoring/rank/{rank}",
+        )
+
     print("Start training...")
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
@@ -73,14 +92,34 @@ def train(net, trainloader):
             running_loss += loss.item()
         
         print(f'[Epoch {epoch + 1}/{epochs}] loss: {running_loss / num_of_batches:.3f}')
+
+        if rank == 0:
+            epoch_loss = dist.reduce(running_loss.clone(), dst=rank) / dataset_sizes['train']
+            run['metrics/epoch/loss'].log(epoch_loss)
     
     print('Finished Training')
+    
+
 
 
 def test(net, PATH, testloader):
     # if is_main_process:
     #     net.load_state_dict(torch.load(PATH))
     # dist.barrier()
+
+    rank = dist.get_rank()
+    if rank == 0:
+        run = neptune.init_run(
+            project='common/showroom',
+            api_token='ANONYMOUS',
+        )
+
+    else:
+        run = neptune.init_run(
+            project='common/showroom',
+            api_token='ANONYMOUS',
+            monitoring_namespace=f"monitoring/rank/{rank}",
+        )
 
     correct = 0
     total = 0
@@ -96,7 +135,24 @@ def test(net, PATH, testloader):
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-    acc = 100 * correct // total
+            for i, ps in enumerate(predicted):
+                description = "\n".join(
+                    ["label {}: {}%".format(labels[n], round(p * 100, 2)) for n, p in enumerate(ps)]
+                )
+
+                run[f"images/predictions/{rank}"].log(
+                    File.as_image(images[i].squeeze().permute(2, 1, 0).clip(0, 1)),
+                    name=f"{i}_{ps}_{labels[i]}",
+                    description=description,
+                )
+
+        acc = 100 * correct // total
+        
+        if rank == 0:
+            acc = dist.reduce(acc.clone(), dst=rank)
+            run['metrics/valid/acc'].log(acc) 
+            
+
     print(f'Accuracy of the network on the 10000 test images: {acc} %')
 
 def init_distributed():
@@ -105,18 +161,16 @@ def init_distributed():
     dist_url = "env://" # default
 
     # only works with torch.distributed.launch // torch.run
-    rank = int(os.environ["RANK"])
-    world_size = int(os.environ['WORLD_SIZE'])
-    local_rank = int(os.environ['LOCAL_RANK'])
+    world_size = 2
 
     dist.init_process_group(
             backend="nccl",
             init_method=dist_url,
-            world_size=world_size,
-            rank=rank)
+            world_size=world_size)
 
     # this will make all .cuda() calls work properly
-    torch.cuda.set_device(local_rank)
+    rank = dist.get_rank()
+    torch.cuda.set_device(rank)
     # synchronizes all the threads to reach this point before moving on
     dist.barrier()
     setup_for_distributed(rank == 0)
@@ -124,21 +178,24 @@ def init_distributed():
 
 if __name__ == '__main__':
     start = time.time()
+
+    os.environ['CUSTOM_RUN_ID'] = 'test_ddp_1'
     
     init_distributed()
     
     PATH = './cifar_net.pth'
-    trainloader, testloader = create_data_loader_cifar10()
+    trainloader, testloader, dataset_sizes = create_data_loader_cifar10()
     net = torchvision.models.resnet50(False).cuda()
 
     # Convert BatchNorm to SyncBatchNorm. 
     net = nn.SyncBatchNorm.convert_sync_batchnorm(net)
 
-    local_rank = int(os.environ['LOCAL_RANK'])
-    net = nn.parallel.DistributedDataParallel(net, device_ids=[local_rank])
-
+    rank = dist.get_rank()
+    device_id = rank % torch.cuda.device_count()
+    net = nn.parallel.DistributedDataParallel(net, device_ids=[device_id])
+    
     start_train = time.time()
-    train(net, trainloader)
+    train(net, trainloader, dataset_sizes, rank)
     end_train = time.time()
     # save
     if is_main_process:
