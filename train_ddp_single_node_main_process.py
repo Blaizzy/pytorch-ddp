@@ -67,11 +67,8 @@ def train(net, trainloader, run, rank):
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()  
-            # synchronizes all the threads to reach this point before moving on
-            dist.reduce(tensor=loss, dst=0)
-            dist.barrier()
-            if rank==0:
-                running_loss += (loss.item() / dist.get_world_size())
+    
+            running_loss += loss.item()
     
             
         if rank==0:
@@ -83,9 +80,6 @@ def train(net, trainloader, run, rank):
 
 
 def test(net, PATH, testloader, run, rank):
-    # if is_main_process:
-    #     net.load_state_dict(torch.load(PATH))
-    # dist.barrier()
 
     correct = 0
     total = 0

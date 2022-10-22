@@ -80,9 +80,6 @@ def train(net, trainloader, run, rank):
 
 
 def test(net, PATH, testloader, run, rank):
-    # if is_main_process:
-    #     net.load_state_dict(torch.load(PATH))
-    # dist.barrier()
 
     correct = 0
     total = 0
@@ -172,6 +169,6 @@ if __name__ == '__main__':
 # Terminal comman:
 # torchrun --nproc_per_node=2 train_ddp.py
 
-# Note: It's limited to 2 GPUs.
+# Note: It's limited to 2 GPUs when it come to Series metadata.
 # For more than 4 GPUs you will need use log from main process otherwise you will an error.
 # ERROR: Timestamp must be non-decreasing for series attribute. 
