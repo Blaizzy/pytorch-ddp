@@ -176,8 +176,8 @@ if __name__ == '__main__':
 # ERROR: Timestamp must be non-decreasing for series attribute.
 
 # Two terminals 
-# torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 train_ddp.py
-# torchrun --nproc_per_node=1 --nnodes=2 --node_rank=1 train_ddp.py
+# torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 train_ddp_multi_node_multi_process.py
+# torchrun --nproc_per_node=1 --nnodes=2 --node_rank=1 train_ddp_multi_node_multi_process.py
 
 
 # For multi GPU: https://pytorch.org/docs/stable/distributed.html#multi-gpu-collective-functions
