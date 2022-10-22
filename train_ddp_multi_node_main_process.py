@@ -70,13 +70,13 @@ def train(net, trainloader, run, rank):
             loss.backward()
             optimizer.step()
             
-            # print(loss.get_device())
-            
             # synchronizes all the threads to reach this point before moving on
             dist.reduce(tensor=loss, dst=0)
             dist.barrier()
             if rank==0:
                 running_loss += (loss.item() / dist.get_world_size())
+                # Bad idea: Inaccurate metrics
+                # run['metrics/train/batch_loss'].log(running_loss) 
     
             
         if rank==0:

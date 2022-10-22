@@ -68,6 +68,8 @@ def train(net, trainloader, run, rank):
             loss.backward()
             optimizer.step()  
             running_loss += loss.item()
+            
+            # Bad idea: Inaccurate metrics
             # run['metrics/train/batch_loss'].log(running_loss) 
     
             

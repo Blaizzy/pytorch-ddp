@@ -67,14 +67,17 @@ def train(net, trainloader, run, rank):
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()  
-            running_loss += loss.item()
-            run['metrics/train/batch_loss'].log(running_loss) 
+            # synchronizes all the threads to reach this point before moving on
+            dist.reduce(tensor=loss, dst=0)
+            dist.barrier()
+            if rank==0:
+                running_loss += (loss.item() / dist.get_world_size())
     
             
-        
-        epoch_loss = running_loss / num_of_batches
-        run['metrics/train/loss'].log(epoch_loss)    
-        print(f'[Epoch {epoch + 1}/{epochs}] loss: {epoch_loss:.3f}')
+        if rank==0:
+            epoch_loss = running_loss / num_of_batches
+            run['metrics/train/loss'].log(epoch_loss)  
+            print(f'[Epoch {epoch + 1}/{epochs}] loss: {epoch_loss:.3f}')
 
     print('Finished Training')
 
@@ -144,19 +147,23 @@ if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
     
     # init neptune
-    run = neptune.init_run(
-        project='common/showroom',
-        api_token='ANONYMOUS',
-        monitoring_namespace=f"monitoring/rank/{local_rank}"
-    )
+    if local_rank==0:
+        run = neptune.init_run(
+            project='common/showroom',
+            api_token='ANONYMOUS',
+            monitoring_namespace=f"monitoring/rank/{local_rank}"
+        )
+    else:
+        run = neptune.init_run(
+            project='common/showroom',
+            api_token='ANONYMOUS',
+            monitoring_namespace=f"monitoring/rank/{local_rank}"
+        )
 
     start_train = time.time()
     train(net, trainloader, run, local_rank)
     end_train = time.time()
-    # save
-    if is_main_process:
-        save_on_master(net.state_dict(), PATH)
-    dist.barrier()
+  
 
     # test
     test(net, PATH, testloader, run, local_rank)
@@ -167,11 +174,7 @@ if __name__ == '__main__':
     print(f"Total elapsed time: {seconds:.2f} seconds, \
      Train 1 epoch {seconds_train:.2f} seconds")
 
-# Log from all processes (Single node 2-GPUs)
+# Log from main process (Single node multi-GPU)
 
-# Terminal comman:
-# torchrun --nproc_per_node=2 train_ddp.py
-
-# Note: It's limited to 2 GPUs.
-# For more than 4 GPUs you will need use log from main process otherwise you will an error.
-# ERROR: Timestamp must be non-decreasing for series attribute. 
+# Terminal command:
+# torchrun --nproc_per_node=4 train_ddp.py
