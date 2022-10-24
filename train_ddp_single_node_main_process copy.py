@@ -132,6 +132,10 @@ if __name__ == '__main__':
     local_rank = int(os.environ['LOCAL_RANK'])
     net = nn.parallel.DistributedDataParallel(net, device_ids=[local_rank])
 
+     # Track hardware metrics for all GPUs being used
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ['CUDA_VISIBLE_DEVICES'] = "0,1,2,3" # No. of GPUs you have
+
     # Create and broadcast custom_run_id
     rank = dist.get_rank()
     if rank == 0:
