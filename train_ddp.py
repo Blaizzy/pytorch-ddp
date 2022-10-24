@@ -1,4 +1,4 @@
-import os 
+import os
 import hashlib
 import time
 
@@ -20,7 +20,7 @@ from utils import setup_for_distributed, save_on_master, is_main_process
 
 def create_data_loader_cifar10():
     rank = int(os.environ['RANK'])
-    
+
     transform = transforms.Compose(
         [
         transforms.RandomCrop(32),
@@ -29,16 +29,16 @@ def create_data_loader_cifar10():
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
     batch_size = 256
-    
+
     trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
-                                            download=True, transform=transform)                                  
-    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset=trainset, rank=rank)                                                  
+                                            download=True, transform=transform)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset=trainset, rank=rank)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
                                             sampler=train_sampler, num_workers=14, pin_memory=True)
 
     testset = torchvision.datasets.CIFAR10(root='./data', train=False,
                                         download=True, transform=transform)
-    test_sampler = torch.utils.data.distributed.DistributedSampler(dataset=testset, rank=rank)                                         
+    test_sampler = torch.utils.data.distributed.DistributedSampler(dataset=testset, rank=rank)
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
                                             shuffle=False, sampler=test_sampler, num_workers=14)
     return trainloader, testloader
@@ -61,19 +61,19 @@ def train(net, trainloader, run, rank):
 
             # zero the parameter gradients
             optimizer.zero_grad()
-            
+
             # forward + backward + optimize
             outputs = net(images)
             loss = criterion(outputs, labels)
             loss.backward()
-            optimizer.step()  
+            optimizer.step()
             running_loss += loss.item()
-            run['metrics/train/batch_loss'].log(running_loss) 
-    
-            
-        
+            run['metrics/train/batch_loss'].log(running_loss)
+
+
+
         epoch_loss = running_loss / num_of_batches
-        run['metrics/train/loss'].log(epoch_loss)    
+        run['metrics/train/loss'].log(epoch_loss)
         print(f'[Epoch {epoch + 1}/{epochs}] loss: {epoch_loss:.3f}')
 
     print('Finished Training')
@@ -95,7 +95,7 @@ def test(net, PATH, testloader, run, rank):
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct+=(predicted == labels).sum().item()
-    
+
     acc = 100 * correct // total
     run['metrics/valid/acc'] = acc
     print(f'Accuracy of the network on the 10000 test images: {acc} %')
@@ -125,26 +125,39 @@ def init_distributed():
 
 if __name__ == '__main__':
     start = time.time()
-    
+
     init_distributed()
-    
+
     PATH = './cifar_net.pth'
     trainloader, testloader = create_data_loader_cifar10()
     net = torchvision.models.resnet50(False).cuda()
 
-    # Convert BatchNorm to SyncBatchNorm. 
+    # Convert BatchNorm to SyncBatchNorm.
     net = nn.SyncBatchNorm.convert_sync_batchnorm(net)
 
     local_rank = int(os.environ['LOCAL_RANK'])
     net = nn.parallel.DistributedDataParallel(net, device_ids=[local_rank])
-    
+
     os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
-    
+
+    # Create and broadcast custom_run_id
+
+    if local_rank == 0:
+        custom_run_id = [hashlib.md5(str(time.time()).encode()).hexdigest()]
+        monitoring_namespace = "monitoring"
+    else:
+        custom_run_id = [None]
+        monitoring_namespace = f"monitoring/{local_rank}"
+
+    dist.broadcast_object_list(custom_run_id, src=0)
+    custom_run_id = custom_run_id[0]
+
     # init neptune
     run = neptune.init_run(
         project='common/showroom',
         api_token='ANONYMOUS',
-        monitoring_namespace=f"monitoring/rank/{local_rank}"
+        monitoring_namespace=monitoring_namespace,
+        custom_run_id= custom_run_id
     )
 
     start_train = time.time()
@@ -171,4 +184,4 @@ if __name__ == '__main__':
 
 # Note: It's limited to 2 GPUs when it come to Series metadata.
 # For more than 4 GPUs you will need use log from main process otherwise you will an error.
-# ERROR: Timestamp must be non-decreasing for series attribute. 
+# ERROR: Timestamp must be non-decreasing for series attribute.
