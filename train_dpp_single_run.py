@@ -138,9 +138,7 @@ if __name__ == '__main__':
 
     rank = dist.get_rank()
     if rank == 0:
-        run = neptune.init_run(
-            custom_run_id= hashlib.md5(str(time.time()).encode()).hexdigest()
-        )
+        run = neptune.init_run()
     else:
         run = None
 
