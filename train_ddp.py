@@ -152,8 +152,6 @@ if __name__ == '__main__':
     custom_run_id = custom_run_id[0]
 
     run = neptune.init_run(
-        project=os.environ["NEPTUNE_PROJECT"],
-        api_token=os.environ["NEPTUNE_API_TOKEN"],
         monitoring_namespace=monitoring_namespace,
         custom_run_id= custom_run_id
     )
