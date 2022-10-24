@@ -68,8 +68,6 @@ def train(net, trainloader, run, rank):
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
-            run['metrics/train/batch_loss'].log(running_loss)
-
 
 
         epoch_loss = running_loss / num_of_batches
@@ -95,6 +93,7 @@ def test(net, PATH, testloader, run, rank):
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct+=(predicted == labels).sum().item()
+
 
     acc = 100 * correct // total
     run['metrics/valid/acc'] = acc
@@ -141,27 +140,26 @@ if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
 
     # Create and broadcast custom_run_id
-
-    if local_rank == 0:
+    rank = dist.get_rank()
+    if rank == 0:
         custom_run_id = [hashlib.md5(str(time.time()).encode()).hexdigest()]
         monitoring_namespace = "monitoring"
     else:
         custom_run_id = [None]
-        monitoring_namespace = f"monitoring/{local_rank}"
+        monitoring_namespace = f"monitoring/{rank}"
 
     dist.broadcast_object_list(custom_run_id, src=0)
     custom_run_id = custom_run_id[0]
 
-    # init neptune
     run = neptune.init_run(
-        project='common/showroom',
-        api_token='ANONYMOUS',
+        project=os.environ["NEPTUNE_PROJECT"],
+        api_token=os.environ["NEPTUNE_API_TOKEN"],
         monitoring_namespace=monitoring_namespace,
         custom_run_id= custom_run_id
     )
 
     start_train = time.time()
-    train(net, trainloader, run, local_rank)
+    train(net, trainloader, run, rank)
     end_train = time.time()
     # save
     if is_main_process:
@@ -169,19 +167,10 @@ if __name__ == '__main__':
     dist.barrier()
 
     # test
-    test(net, PATH, testloader, run, local_rank)
+    test(net, PATH, testloader, run, rank)
 
     end = time.time()
     seconds = (end - start)
     seconds_train = (end_train - start_train)
     print(f"Total elapsed time: {seconds:.2f} seconds, \
      Train 1 epoch {seconds_train:.2f} seconds")
-
-# Log from all processes (Single node 2-GPUs)
-
-# Terminal comman:
-# torchrun --nproc_per_node=2 train_ddp.py
-
-# Note: It's limited to 2 GPUs when it come to Series metadata.
-# For more than 4 GPUs you will need use log from main process otherwise you will an error.
-# ERROR: Timestamp must be non-decreasing for series attribute.

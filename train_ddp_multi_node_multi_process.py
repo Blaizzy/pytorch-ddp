@@ -1,4 +1,4 @@
-import os 
+import os
 import hashlib
 import time
 
@@ -20,7 +20,7 @@ from utils import setup_for_distributed, save_on_master, is_main_process
 
 def create_data_loader_cifar10():
     rank = int(os.environ['RANK'])
-    
+
     transform = transforms.Compose(
         [
         transforms.RandomCrop(32),
@@ -29,16 +29,16 @@ def create_data_loader_cifar10():
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
     batch_size = 256
-    
+
     trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
-                                            download=True, transform=transform)                                  
-    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset=trainset, rank=rank)                                                  
+                                            download=True, transform=transform)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset=trainset, rank=rank)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
                                             sampler=train_sampler, num_workers=14, pin_memory=True)
 
     testset = torchvision.datasets.CIFAR10(root='./data', train=False,
                                         download=True, transform=transform)
-    test_sampler = torch.utils.data.distributed.DistributedSampler(dataset=testset, rank=rank)                                         
+    test_sampler = torch.utils.data.distributed.DistributedSampler(dataset=testset, rank=rank)
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
                                             shuffle=False, sampler=test_sampler, num_workers=14)
     return trainloader, testloader
@@ -61,21 +61,16 @@ def train(net, trainloader, run, rank):
 
             # zero the parameter gradients
             optimizer.zero_grad()
-            
+
             # forward + backward + optimize
             outputs = net(images)
             loss = criterion(outputs, labels)
             loss.backward()
-            optimizer.step()  
+            optimizer.step()
             running_loss += loss.item()
-            
-            # Bad idea: Inaccurate metrics
-            # run['metrics/train/batch_loss'].log(running_loss) 
-    
-            
-        
+
         epoch_loss = running_loss / num_of_batches
-        run['metrics/train/loss'].log(epoch_loss)    
+        run['metrics/train/loss'].log(epoch_loss)
         print(f'[Epoch {epoch + 1}/{epochs}] loss: {epoch_loss:.3f}')
 
     print('Finished Training')
@@ -100,7 +95,7 @@ def test(net, PATH, testloader, run, rank):
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct+=(predicted == labels).sum().item()
-    
+
     acc = 100 * correct // total
     run['metrics/valid/acc'] = acc
     print(f'Accuracy of the network on the 10000 test images: {acc} %')
@@ -128,44 +123,55 @@ def init_distributed():
 
 if __name__ == '__main__':
     start = time.time()
-    
+
     init_distributed()
     rank = int(os.environ["RANK"])
-    
-    
+
+
     PATH = './cifar_net.pth'
     trainloader, testloader = create_data_loader_cifar10()
-    
+
     rank = int(os.environ["RANK"])
     net = torchvision.models.resnet50(False).to(f'cuda:{rank}')
-    
+
     os.environ['CUDA_VISIBLE_DEVICES'] = str(rank)
 
-    # Convert BatchNorm to SyncBatchNorm. 
+    # Convert BatchNorm to SyncBatchNorm.
     net = nn.SyncBatchNorm.convert_sync_batchnorm(net)
 
     # local_rank = int(os.environ['LOCAL_RANK'])
     net = nn.parallel.DistributedDataParallel(
-        net, 
+        net,
         device_ids=[rank]
     )
-    
-    # init neptune
+
+    # Create and broadcast custom_run_id
+    rank = dist.get_rank()
+    if rank == 0:
+        custom_run_id = [hashlib.md5(str(time.time()).encode()).hexdigest()]
+        monitoring_namespace = "monitoring"
+    else:
+        custom_run_id = [None]
+        monitoring_namespace = f"monitoring/{rank}"
+
+    dist.broadcast_object_list(custom_run_id, src=0)
+    custom_run_id = custom_run_id[0]
+
     run = neptune.init_run(
-        project='common/showroom',
-        api_token='ANONYMOUS',
-        monitoring_namespace=f"monitoring/rank/{rank}"
+        project=os.environ["NEPTUNE_PROJECT"],
+        api_token=os.environ["NEPTUNE_API_TOKEN"],
+        monitoring_namespace=monitoring_namespace,
+        custom_run_id= custom_run_id
     )
-        
-    
+
     start_train = time.time()
     train(net, trainloader, run, rank)
     end_train = time.time()
 
     # test
     test(net, PATH, testloader, run, rank)
-    
-   
+
+
     end = time.time()
     seconds = (end - start)
     seconds_train = (end_train - start_train)
@@ -173,13 +179,3 @@ if __name__ == '__main__':
      Train 1 epoch {seconds_train:.2f} seconds")
 
 
-# Log from all processes (multi-node single GPU)
-
-# ERROR: Timestamp must be non-decreasing for series attribute.
-
-# Two terminals 
-# torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 train_ddp_multi_node_multi_process.py
-# torchrun --nproc_per_node=1 --nnodes=2 --node_rank=1 train_ddp_multi_node_multi_process.py
-
-
-# For multi GPU: https://pytorch.org/docs/stable/distributed.html#multi-gpu-collective-functions
