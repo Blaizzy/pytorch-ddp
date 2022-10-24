@@ -1,8 +1,6 @@
 import os
 import hashlib
 import time
-
-
 import torch
 import torchvision
 import torchvision.transforms as transforms
@@ -10,13 +8,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.distributed as dist
-
 import torchvision
 import neptune.new as neptune
 
-
 from utils import setup_for_distributed, save_on_master, is_main_process
-
 
 def create_data_loader_cifar10():
     rank = dist.get_rank()
@@ -69,7 +64,7 @@ def train(net, trainloader, run, rank):
             optimizer.step()
             running_loss += loss.item()
 
-        if rank==0:
+        if rank == 0:
             epoch_loss = running_loss / num_of_batches
             run['metrics/train/loss'].log(epoch_loss)
             print(f'[Epoch {epoch + 1}/{epochs}] loss: {epoch_loss:.3f}')
@@ -141,7 +136,7 @@ if __name__ == '__main__':
 
     # Create and broadcast custom_run_id
     rank = dist.get_rank()
-    if rank== 0:
+    if rank == 0:
         custom_run_id = [hashlib.md5(str(time.time()).encode()).hexdigest()]
         monitoring_namespace = "monitoring"
     else:

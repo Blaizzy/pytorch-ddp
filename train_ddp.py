@@ -1,8 +1,6 @@
 import os
 import hashlib
 import time
-
-
 import torch
 import torchvision
 import torchvision.transforms as transforms
@@ -10,10 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.distributed as dist
-
 import torchvision
 import neptune.new as neptune
-
 
 from utils import setup_for_distributed, save_on_master, is_main_process
 
