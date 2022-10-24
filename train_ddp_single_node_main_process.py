@@ -154,7 +154,7 @@ if __name__ == '__main__':
 
     run = neptune.init_run(
         monitoring_namespace=monitoring_namespace,
-        custom_run_id= custom_run_id
+        custom_run_id=custom_run_id
     )
 
     start_train = time.time()
