@@ -132,11 +132,12 @@ if __name__ == '__main__':
     local_rank = int(os.environ['LOCAL_RANK'])
     net = nn.parallel.DistributedDataParallel(net, device_ids=[local_rank])
 
+    rank = dist.get_rank()
+
     # Needed to correctly track each GPU usage
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(rank)
 
     # Create and broadcast custom_run_id
-    rank = dist.get_rank()
     if rank == 0:
         custom_run_id = [hashlib.md5(str(time.time()).encode()).hexdigest()]
         monitoring_namespace = "monitoring"
