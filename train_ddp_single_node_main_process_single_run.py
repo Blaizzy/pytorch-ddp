@@ -136,12 +136,10 @@ if __name__ == '__main__':
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ['CUDA_VISIBLE_DEVICES'] = "0,1,2,3" # No. of GPUs you have
 
-    # Create and broadcast custom_run_id
     rank = dist.get_rank()
     if rank == 0:
-        custom_run_id = [hashlib.md5(str(time.time()).encode()).hexdigest()]
         run = neptune.init_run(
-            custom_run_id=custom_run_id
+            custom_run_id= hashlib.md5(str(time.time()).encode()).hexdigest()
         )
     else:
         run = None
